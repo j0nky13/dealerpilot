@@ -8,8 +8,8 @@ export default function NavBar() {
     <header className="sticky top-0 z-40 bg-[#0B0F14]/70 backdrop-blur supports-[backdrop-filter]:bg-[#0B0F14]/60">
       <div className="mx-auto max-w-7xl px-4 py-4 flex items-center justify-between">
         <Link to="/" className="flex items-center gap-3">
-          <img src="/logo.svg" alt="DealerPilot" className="h-7 w-auto" />
-          <span className="sr-only">DealerPilot</span>
+          <img src="/logo.svg" alt="Synchronising" className="h-7 w-auto" />
+          <span className="sr-only">Sychronising</span>
         </Link>
         <nav className="flex items-center gap-3">
           <button onClick={() => setOpen(true)} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 transition">Contact</button>
