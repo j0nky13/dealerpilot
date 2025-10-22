@@ -15,7 +15,7 @@ export default function CTA() {
             Join Beta
           </a>
         </div>
-        <p className="mt-6 text-xs text-[#9FB0C6]">© 2025 Marsh Monster · Synchronising.com</p>
+        {/* <p className="mt-6 text-xs text-[#9FB0C6]">© 2025 Marsh Monster · Synchronising.com</p> */}
       </div>
     </section>
   );
