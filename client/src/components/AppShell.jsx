@@ -1,5 +1,5 @@
-import { NavLink, Outlet } from "react-router-dom";
-import { useState } from "react";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useState, useMemo } from "react";
 import {
   Home,
   List,
@@ -10,14 +10,25 @@ import {
   Shuffle,
   Settings as SettingsIcon,
   Menu,
-  PieChart, // 👈 added for My Stats
+  PieChart,
 } from "lucide-react";
 import Viewport from "./Viewport.jsx";
 import QuickAddLeadModal from "./QuickAddLeadModal.jsx";
+import { useAuth } from "../lib/authProvider.jsx";
+import { logout } from "../lib/firebase";
 
 export default function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const nav = useNavigate();
+  const { user } = useAuth();
+
+  const greeting = useMemo(() => {
+    const h = new Date().getHours();
+    if (h < 12) return "Good morning,";
+    if (h < 18) return "Good afternoon,";
+    return "Good evening,";
+  }, []);
 
   const NavItem = ({ to, label, Icon }) => (
     <NavLink
@@ -25,7 +36,7 @@ export default function AppShell() {
       title={label}
       className={({ isActive }) =>
         `flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors
-        ${isActive ? "bg-white/10 text-white" : "text-[#9FB0C6] hover:text-white hover:bg-white/5"}`
+         ${isActive ? "bg-white/10 text-white" : "text-[#9FB0C6] hover:text-white hover:bg-white/5"}`
       }
     >
       <Icon className="h-5 w-5 shrink-0" />
@@ -57,8 +68,10 @@ export default function AppShell() {
           {/* leave space on the left; we already have a fixed hamburger */}
           <img src="/logo.svg" alt="" className="h-6" />
           <div className="ml-2 hidden md:flex flex-col leading-tight">
-            <span className="text-sm text-white font-medium">Good afternoon,</span>
-            <span className="text-xs text-[#9FB0C6] truncate">user@example.com</span>
+            <span className="text-sm text-white font-medium">{greeting}</span>
+            <span className="text-xs text-[#9FB0C6] truncate">
+              {user?.email ?? "user@example.com"}
+            </span>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <input
@@ -92,8 +105,6 @@ export default function AppShell() {
           <div className="pointer-events-none absolute top-0 right-0 h-full w-px bg-white/10" />
           <div className="pointer-events-none absolute top-0 right-0 h-full w-8 shadow-[inset_-12px_0_24px_-16px_rgba(0,0,0,0.6)]" />
 
-
-
           {/* Top navigation group */}
           <nav className="space-y-1">
             <NavItem to="/app/today" label="Today" Icon={Home} />
@@ -101,7 +112,7 @@ export default function AppShell() {
             <NavItem to="/app/appointments" label="Appointments" Icon={Calendar} />
             <NavItem to="/app/reports" label="Reports" Icon={BarChart3} />
             <NavItem to="/app/manager" label="Manager" Icon={Shield} />
-            <NavItem to="/app/mystats" label="My Stats" Icon={PieChart} /> {/* 👈 added */}
+            <NavItem to="/app/mystats" label="My Stats" Icon={PieChart} />
             <NavItem to="/app/team" label="Team" Icon={Users} />
             <NavItem to="/app/roundrobin" label="Round Robin" Icon={Shuffle} />
           </nav>
@@ -120,8 +131,16 @@ export default function AppShell() {
           {/* Logout button with top border */}
           <div className="border-t border-white/10 pt-2">
             <button
+              onClick={async () => {
+                try {
+                  await logout();
+                } finally {
+                  // clear anything custom you store
+                  localStorage.removeItem("storeCode");
+                  nav("/login", { replace: true });
+                }
+              }}
               className="w-full mt-2 flex items-center gap-2 text-sm px-3 py-2 rounded-lg bg-transparent hover:bg-red-500/10 text-left text-[#9FB0C6] hover:text-red-500"
-              onClick={() => console.log('Logout clicked')}
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h6a2 2 0 012 2v1" />
@@ -140,8 +159,9 @@ export default function AppShell() {
 
         {/* Content wrapper shifts to make room for fixed sidebar */}
         <div
-          className={`transition-[padding] duration-300 ease-out
-            ${collapsed ? "md:pl-16" : "md:pl-64"}`}
+          className={`transition-[padding] duration-300 ease-out ${
+            collapsed ? "md:pl-16" : "md:pl-64"
+          }`}
         >
           {/* Page content scrolls independently of the sidebar */}
           <main className="py-6 px-6 max-w-7xl mx-auto">

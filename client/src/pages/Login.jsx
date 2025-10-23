@@ -1,246 +1,169 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
-import { Mail, ArrowLeft, ShieldCheck, Building2, Link2, RefreshCcw } from "lucide-react";
+// src/pages/Login.jsx
+import { useEffect, useState } from "react";
+import { Navigate, useNavigate } from "react-router-dom";
+import { completeMagicLinkSignIn, sendMagicLink } from "../lib/firebase";
+import { useAuth } from "../lib/authProvider.jsx";
 import AnimatedGrid from "../components/AnimatedGrid.jsx";
-import Viewport from "../components/Viewport.jsx";
 
-/**
- * Login (Email Link mode)
- * - Default flow: collect email (+ optional tenant code) → send magic link → "check your email" screen
- * - 6-digit OTP scaffolding is preserved in comments for later switch-over
- * - No Firebase wiring yet; handlers are stubbed with TODOs
- */
 export default function Login() {
+  const { user } = useAuth();
+  const nav = useNavigate();
+
   const [email, setEmail] = useState("");
-  const [tenant, setTenant] = useState(""); // optional dealership code/domain
-  const [status, setStatus] = useState("idle"); // idle | sending | sent | error
-  const [error, setError] = useState("");
+  const [storeCode, setStoreCode] = useState(() => localStorage.getItem("storeCode") || "");
+  const [sent, setSent] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
 
-  // TODO: when wiring Firebase:
-  // import { sendSignInLinkToEmail } from "firebase/auth";
-  // const actionCodeSettings = {
-  //   url: `${window.location.origin}/app`, // or include tenant as a query param
-  //   handleCodeInApp: true,
-  //   dynamicLinkDomain: "your-dynamic-link.page.link", // optional
-  // };
+  // Complete magic link if present
+  useEffect(() => {
+    completeMagicLinkSignIn().catch((e) => setErr(e.message || "Sign-in failed"));
+  }, []);
 
-  const handleSendLink = async (e) => {
-    e.preventDefault();
-    if (!email.trim()) return;
-
-    try {
-      setStatus("sending");
-      setError("");
-
-      // TODO (Firebase): await sendSignInLinkToEmail(auth, email, actionCodeSettings);
-      // localStorage.setItem("dealerpilot_login_email", email);
-      // if (tenant) localStorage.setItem("dealerpilot_tenant_hint", tenant);
-
-      // Simulate success for now:
-      await new Promise((r) => setTimeout(r, 500));
-      setStatus("sent");
-    } catch (err) {
-      setStatus("error");
-      setError("Could not send link. Please try again.");
+  // Prefill store code from ?store= param if present
+  useEffect(() => {
+    const u = new URL(window.location.href);
+    const q = u.searchParams.get("store");
+    if (q) {
+      setStoreCode(q);
+      localStorage.setItem("storeCode", q);
     }
-  };
+  }, []);
 
-  const handleResend = async () => {
-    if (status !== "sent") return;
-    setStatus("sending");
-    await new Promise((r) => setTimeout(r, 400));
-    setStatus("sent");
-  };
-
-  const openWebmail = (provider) => {
-    const map = {
-      gmail: "https://mail.google.com/",
-      outlook: "https://outlook.office.com/mail/",
-      yahoo: "https://mail.yahoo.com/",
-    };
-    window.open(map[provider], "_blank", "noopener,noreferrer");
-  };
+  if (user) return <Navigate to="/app/today" replace />;
 
   return (
-    <Viewport>
-      <section className="relative min-h-screen">
+    <div className="relative min-h-screen overflow-hidden bg-[#0B0F14] text-white">
+      {/* Animated Background */}
+      <div className="absolute inset-0 -z-10" aria-hidden="true">
         <AnimatedGrid />
+      </div>
 
-        {/* Top utility bar */}
-        <div className="relative z-10">
-          <div className="mx-auto max-w-7xl px-4 h-16 flex items-center justify-between">
-            <Link
-              to="/"
-              className="inline-flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15"
-              title="Back to landing"
+      {/* Back link */}
+      <button
+        onClick={() => nav(-1)}
+        className="absolute left-5 top-5 z-20 rounded-md px-3 py-1.5 text-sm text-[#9FB0C6] hover:text-white hover:bg-white/5"
+      >
+        ← Back
+      </button>
+
+      {/* Secure tag top-right */}
+      <div className="absolute right-5 top-5 z-20 text-xs text-[#9FB0C6]">Secure Portal</div>
+
+      {/* ---- Center card ---- */}
+      <main className="relative z-10 grid min-h-screen place-items-center px-6 py-16">
+        <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0F161F]/80 p-6 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.6)] backdrop-blur">
+          {/* header */}
+          <div className="mb-4 flex items-center gap-3">
+            {/* shield icon */}
+            <span className="grid h-9 w-9 place-items-center rounded-lg bg-white/5 ring-1 ring-white/10">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M12 3l7 3v6c0 4.97-3.05 8.91-7 10-3.95-1.09-7-5.03-7-10V6l7-3z" stroke="#5BE6CE" strokeWidth="1.5" />
+                <path d="M9.5 12.5l2 2 3.5-4" stroke="#5BE6CE" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+            <div>
+              <h1 className="text-xl font-semibold">DealerPilot Portal</h1>
+              <p className="text-xs text-[#9FB0C6]">Sign in with a secure email link</p>
+            </div>
+          </div>
+
+          <form
+            className="mt-4 space-y-4"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setErr("");
+              setSent(false);
+              setLoading(true);
+              try {
+                if (storeCode) localStorage.setItem("storeCode", storeCode.trim());
+                await sendMagicLink(email.trim());
+                setSent(true);
+              } catch (ex) {
+                setErr(ex.message || "Failed to send link");
+              } finally {
+                setLoading(false);
+              }
+            }}
+          >
+            {/* store code (optional) */}
+            <div>
+              <label htmlFor="store" className="mb-1 block text-sm text-[#9FB0C6]">
+                Dealership code (optional)
+              </label>
+              <div className="flex items-center gap-2 rounded-lg bg-white/5 px-3 ring-1 ring-white/10 focus-within:ring-2 focus-within:ring-[#5BE6CE]/40">
+                <svg width="16" height="16" viewBox="0 0 24 24" className="opacity-70">
+                  <path d="M7 11V7a5 5 0 0110 0v4" stroke="currentColor" strokeWidth="1.5" fill="none" />
+                  <rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" strokeWidth="1.5" fill="none" />
+                </svg>
+                <input
+                  id="store"
+                  value={storeCode}
+                  onChange={(e) => setStoreCode(e.target.value)}
+                  placeholder="e.g. marsh-monster-west"
+                  className="w-full bg-transparent py-2.5 text-sm outline-none placeholder:text-[#8AA0B8]"
+                />
+              </div>
+            </div>
+
+            {/* email */}
+            <div>
+              <label htmlFor="email" className="mb-1 block text-sm text-[#9FB0C6]">
+                Email
+              </label>
+              <div className="flex items-center gap-2 rounded-lg bg-white/5 px-3 ring-1 ring-white/10 focus-within:ring-2 focus-within:ring-[#5BE6CE]/40">
+                <svg width="16" height="16" viewBox="0 0 24 24" className="opacity-70">
+                  <path d="M4 6h16v12H4z" stroke="currentColor" strokeWidth="1.5" fill="none" />
+                  <path d="M4 7l8 6 8-6" stroke="currentColor" strokeWidth="1.5" fill="none" />
+                </svg>
+                <input
+                  id="email"
+                  type="email"
+                  required
+                  autoFocus
+                  placeholder="you@dealership.com"
+                  className="w-full bg-transparent py-2.5 text-sm outline-none placeholder:text-[#8AA0B8]"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* primary action */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full rounded-lg bg-[#5BE6CE] px-4 py-2.5 font-medium text-black transition hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              <ArrowLeft className="h-4 w-4" />
-              Back
-            </Link>
-            <div className="text-xs text-[#9FB0C6]">Secure Portal</div>
-          </div>
-        </div>
+              {loading ? "Sending…" : "Send sign-in link"}
+            </button>
+          </form>
 
-        {/* Centered card */}
-        <div className="relative z-10 grid place-items-center px-4 pb-20">
-          <div className="w-full max-w-md mt-10 rounded-2xl bg-[#0D131B]/90 ring-1 ring-white/10 backdrop-blur shadow-[0_20px_60px_-20px_rgba(0,0,0,0.6)]">
-            {/* Card header */}
-            <div className="px-6 pt-6">
-              <div className="flex items-center gap-3">
-                <div className="h-9 w-9 grid place-items-center rounded-xl bg-[#5BE6CE]/10 ring-1 ring-[#5BE6CE]/25">
-                  <ShieldCheck className="h-4 w-4 text-[#5BE6CE]" />
-                </div>
-                <div>
-                  <h1 className="text-lg font-semibold leading-tight">DealerPilot Portal</h1>
-                  <p className="text-xs text-[#9FB0C6]">Sign in with a secure email link</p>
-                </div>
-              </div>
+          {/* helper text */}
+          <p className="mt-3 text-xs text-[#9FB0C6]">
+            We’ll email you a secure sign-in link. By continuing you agree to our{" "}
+            <a href="/terms" className="text-white hover:underline">Terms</a>.
+          </p>
+
+          {/* status + errors */}
+          {sent && (
+            <div className="mt-4 rounded-lg border border-white/10 bg-white/5 p-3 text-sm text-[#9FB0C6]">
+              Link sent to <span className="text-white">{email}</span>. Open it on this device to finish signing in.
             </div>
+          )}
+          {err && <p className="mt-3 text-sm text-red-400">{err}</p>}
 
-            <div className="mt-4 h-px w-full bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-
-            {/* Body */}
-            <div className="px-6 py-6">
-              {status === "sent" ? (
-                <div className="space-y-5">
-                  <div className="flex items-center gap-2 text-sm">
-                    <Link2 className="h-4 w-4 text-[#5BE6CE]" />
-                    <div>
-                      We sent a sign-in link to <span className="font-medium">{email}</span>.
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl bg-white/[0.06] ring-1 ring-white/10 p-4 text-sm text-[#C7D6EA]">
-                    Open the email on this device and click the link to continue. If you don’t see it, check Spam/Promotions.
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      onClick={() => openWebmail("gmail")}
-                      className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-sm"
-                    >
-                      Open Gmail
-                    </button>
-                    <button
-                      onClick={() => openWebmail("outlook")}
-                      className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-sm"
-                    >
-                      Open Outlook
-                    </button>
-                    <button
-                      onClick={() => openWebmail("yahoo")}
-                      className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-sm"
-                    >
-                      Open Yahoo
-                    </button>
-
-                    <div className="ml-auto" />
-
-                    <button
-                      onClick={handleResend}
-                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-sm"
-                      title="Resend link"
-                    >
-                      <RefreshCcw className="h-4 w-4" />
-                      Resend
-                    </button>
-                  </div>
-
-                  <div className="text-xs text-[#9FB0C6]">
-                    Wrong email?{" "}
-                    <button
-                      className="underline hover:no-underline"
-                      onClick={() => {
-                        setStatus("idle");
-                        setError("");
-                      }}
-                    >
-                      Use a different email
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <form onSubmit={handleSendLink} className="space-y-4">
-                  {/* Optional tenant code */}
-                  <label className="block">
-                    <span className="mb-1.5 block text-xs text-[#9FB0C6]">Dealership code (optional)</span>
-                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 ring-1 ring-white/10">
-                      <Building2 className="h-4 w-4 opacity-70" />
-                      <input
-                        value={tenant}
-                        onChange={(e) => setTenant(e.target.value)}
-                        placeholder="e.g. marsh-monster-west"
-                        className="bg-transparent outline-none text-sm w-full"
-                        autoComplete="organization"
-                      />
-                    </div>
-                  </label>
-
-                  {/* Email input */}
-                  <label className="block">
-                    <span className="mb-1.5 block text-xs text-[#9FB0C6]">Email</span>
-                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 ring-1 ring-white/10">
-                      <Mail className="h-4 w-4 opacity-70" />
-                      <input
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="you@dealership.com"
-                        className="bg-transparent outline-none text-sm w-full"
-                        type="email"
-                        autoComplete="email"
-                        required
-                      />
-                    </div>
-                  </label>
-
-                  {/* Submit */}
-                  <button
-                    type="submit"
-                    disabled={status === "sending"}
-                    className="w-full h-10 rounded-lg bg-[#5BE6CE] text-black font-medium hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {status === "sending" ? "Sending…" : "Send sign-in link"}
-                  </button>
-
-                  {status === "error" && (
-                    <div className="text-xs text-rose-300">{error}</div>
-                  )}
-
-                  <div className="text-xs text-[#9FB0C6]">
-                    We’ll email you a secure sign-in link. By continuing you agree to our{" "}
-                    <a className="underline hover:no-underline" href="#" onClick={(e) => e.preventDefault()}>Terms</a>.
-                  </div>
-                </form>
-              )}
-            </div>
-
-            {/* Card footer */}
-            <div className="px-6 pb-6">
-              <div className="h-px w-full bg-gradient-to-r from-transparent via-white/10 to-transparent mb-4" />
-              <div className="flex items-center justify-between">
-                <div className="text-xs text-[#9FB0C6]">
-                  Need access?{" "}
-                  <Link to="/" className="underline hover:no-underline">Request a demo</Link>
-                </div>
-                <Link to="/" className="text-xs px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15">
-                  Back to site
-                </Link>
-              </div>
-            </div>
+          {/* footer actions */}
+          <div className="mt-5 flex items-center justify-between text-xs text-[#9FB0C6]">
+            <a href="/contact" className="hover:text-white">Need access? Request a demo</a>
+            <a href="/" className="rounded-md bg-white/5 px-3 py-1.5 hover:bg-white/10">Back to site</a>
           </div>
 
-          {/* Helper text */}
-          <div className="mt-6 text-center text-xs text-[#9FB0C6]">
+          <p className="mt-5 text-center text-[11px] text-[#748AA5]">
             If the link doesn’t arrive, check spam or ask your manager to verify your email.
-          </div>
-
-          {/* ---------- OPTIONAL: keep 6-digit OTP UI scaffold for later ----------
-          <div className="mt-8 text-center text-xs text-[#9FB0C6]">
-            Prefer a code instead? We can enable 6-digit email OTP later without changing this page.
-          </div>
-          --------------------------------------------------------------------- */}
+          </p>
         </div>
-      </section>
-    </Viewport>
+      </main>
+    </div>
   );
 }
