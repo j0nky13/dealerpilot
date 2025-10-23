@@ -1,3 +1,4 @@
+// src/lib/firebase.js
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
@@ -8,7 +9,8 @@ import {
   signOut,
 } from "firebase/auth";
 import {
-  getFirestore,
+  // swap getFirestore -> initializeFirestore so we can set transport options
+  initializeFirestore,
   doc,
   getDoc,
   setDoc,
@@ -24,7 +26,13 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+
+// ✅ force a firewall-friendly transport (kills WebChannel 400s)
+export const db = initializeFirestore(app, {
+  experimentalAutoDetectLongPolling: true,
+  useFetchStreams: false,
+  ignoreUndefinedProperties: true,
+});
 
 // --- Auth helpers ---
 export async function sendMagicLink(email) {
@@ -43,23 +51,23 @@ export async function completeMagicLinkSignIn() {
   if (!email) {
     email = window.prompt("Please confirm your email for sign-in");
   }
+
   try {
     const cred = await signInWithEmailLink(auth, email, window.location.href);
     localStorage.removeItem("emailForSignIn");
 
-    // Ensure a user profile exists (optional but useful)
+    // ensure user profile exists / update last login
     const uref = doc(db, "users", cred.user.uid);
     const snap = await getDoc(uref);
     if (!snap.exists()) {
       await setDoc(uref, {
         email,
-        role: "sales",        // default role; elevate via Manager UI later
+        role: "sales",        // default; elevate later via Manager UI
         active: true,
         createdAt: serverTimestamp(),
         lastLoginAt: serverTimestamp(),
       });
     } else {
-      // touch last login
       await setDoc(uref, { lastLoginAt: serverTimestamp() }, { merge: true });
     }
 
@@ -78,7 +86,6 @@ export async function logout() {
   try {
     await signOut(auth);
   } finally {
-    // remove any app-local caches
     localStorage.removeItem("emailForSignIn");
     localStorage.removeItem("storeCode");
   }

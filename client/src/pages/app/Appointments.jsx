@@ -7,13 +7,13 @@ import {
   saveAppointments,
   updateAppointment,
 } from "../../lib/appointmentsStorage.js";
-import { getCurrentUserRole, getCurrentUserId } from "../../lib/roles.js";
+import { useAuth } from "../../lib/authProvider.jsx";
 
 function startOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0); }
 
 export default function Appointments() {
-  const role = getCurrentUserRole();
-  const me = getCurrentUserId();
+  const { user, role } = useAuth();
+  const me = user?.uid || "u1";
   const canSeeAll = role === "manager" || role === "bdc" || role === "admin";
 
   const [selectedDay, setSelectedDay] = useState(new Date());
@@ -36,19 +36,28 @@ export default function Appointments() {
 
   const setStatus = (a, status) => {
     const updated = updateAppointment(a.id, { status });
-    const next = list.map((x) => (x.id === a.id ? updated : x));
-    setList(next);
+    setList(prev => {
+      const next = prev.map((x) => (x.id === a.id ? updated : x));
+      saveAppointments(next);
+      return next;
+    });
   };
 
   const reschedule = (a, minutes = 60) => {
     const updated = updateAppointment(a.id, { at: a.at + minutes * 60000 });
-    const next = list.map((x) => (x.id === a.id ? updated : x));
-    setList(next);
+    setList(prev => {
+      const next = prev.map((x) => (x.id === a.id ? updated : x));
+      saveAppointments(next);
+      return next;
+    });
   };
 
   const onDrawerChange = (updated) => {
-    setList((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
-    saveAppointments(list);
+    setList((prev) => {
+      const next = prev.map((x) => (x.id === updated.id ? updated : x));
+      saveAppointments(next);
+      return next;
+    });
   };
 
   return (

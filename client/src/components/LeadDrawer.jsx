@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import RightDrawer from "./RightDrawer.jsx";
-import { updateLead } from "../lib/leadsStorage.js";
+// ⬇️ swap local update for Firestore API
+import { patchLead } from "../lib/leadsApi.js";
 import {
   loadAppointments,
   addAppointment,
   updateAppointment,
 } from "../lib/appointmentsStorage.js";
-import { getCurrentUserId } from "../lib/roles.js";
+import { useAuth } from "../lib/authProvider.jsx";
 
 // --- helpers: clean & format to (XXX)-XXX-XXXX ---
 function onlyDigits(v = "") {
-  return (v.match(/\d/g) || []).join("").slice(0, 10); // cap at 10
+  return (v.match(/\d/g) || []).join("").slice(0, 10);
 }
 function formatUSPhone(v = "") {
   const d = onlyDigits(v);
@@ -22,7 +23,9 @@ function formatUSPhone(v = "") {
 }
 
 export default function LeadDrawer({ lead, open, onClose, onChange }) {
-  const me = getCurrentUserId();
+  const { user } = useAuth();
+  const me = user?.uid ?? null;
+
   const [local, setLocal] = useState(null);
 
   // sync lead -> local state
@@ -70,29 +73,35 @@ export default function LeadDrawer({ lead, open, onClose, onChange }) {
     setLocal((prev) => ({ ...prev, phone: next }));
   };
 
-  const saveLeadBasics = () => {
-    const updated = updateLead(local.id, {
+  const saveLeadBasics = async () => {
+    const patch = {
       name: local.name ?? "",
-      phone: local.phone?.trim?.() || "", // stored formatted; switch to onlyDigits(local.phone) if you want raw
+      phone: local.phone?.trim?.() || "",
       email: local.email ?? "",
       source: local.source ?? "",
       status: local.status ?? "working",
-      nextAction: local.nextAction ?? undefined,
-      lastActivityAt: Date.now(),
-    });
+      // Use null (not undefined) so Firestore removes/clears properly
+      nextAction: local.nextAction ?? null,
+    };
+    await patchLead(local.id, patch);
+    const updated = { ...local, ...patch, lastActivityAt: Date.now() };
     onChange?.(updated);
     return updated;
   };
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
 
-    // 1) Save core lead fields
-    const updatedLead = saveLeadBasics();
+    // 1) Save core lead fields (Firestore)
+    const updatedLead = await saveLeadBasics();
 
-    // 2) Appointment sync
+    // 2) Appointment sync (still local for now)
     if (apptEnabled) {
       const atMs = new Date(apptAt).getTime();
+      if (Number.isNaN(atMs)) {
+        onClose?.();
+        return;
+      }
       if (existingAppt) {
         const updatedAppt = updateAppointment(existingAppt.id, {
           at: atMs,
@@ -100,12 +109,16 @@ export default function LeadDrawer({ lead, open, onClose, onChange }) {
           notes: existingAppt.notes || "",
           status: existingAppt.status || "scheduled",
         });
-        const patched = updateLead(updatedLead.id, {
+        await patchLead(updatedLead.id, {
+          status: "appt_set",
+          nextAction: { type: "appt", dueAt: updatedAppt.at },
+        });
+        onChange?.({
+          ...updatedLead,
           status: "appt_set",
           nextAction: { type: "appt", dueAt: updatedAppt.at },
           lastActivityAt: Date.now(),
         });
-        onChange?.(patched);
       } else {
         addAppointment({
           leadId: updatedLead.id,
@@ -117,22 +130,30 @@ export default function LeadDrawer({ lead, open, onClose, onChange }) {
           assignedTo: updatedLead.assignedTo || me,
           notes: "",
         });
-        const patched = updateLead(updatedLead.id, {
+        await patchLead(updatedLead.id, {
+          status: "appt_set",
+          nextAction: { type: "appt", dueAt: atMs },
+        });
+        onChange?.({
+          ...updatedLead,
           status: "appt_set",
           nextAction: { type: "appt", dueAt: atMs },
           lastActivityAt: Date.now(),
         });
-        onChange?.(patched);
       }
     } else if (existingAppt) {
       // if toggled off, mark existing appt cancelled and revert lead status if needed
       updateAppointment(existingAppt.id, { status: "cancelled" });
-      const patched = updateLead(updatedLead.id, {
+      await patchLead(updatedLead.id, {
         status: updatedLead.status === "appt_set" ? "working" : updatedLead.status,
-        nextAction: undefined,
+        nextAction: null,
+      });
+      onChange?.({
+        ...updatedLead,
+        status: updatedLead.status === "appt_set" ? "working" : updatedLead.status,
+        nextAction: null,
         lastActivityAt: Date.now(),
       });
-      onChange?.(patched);
     }
 
     onClose?.(); // smooth close handled by RightDrawer exit animation
@@ -169,7 +190,7 @@ export default function LeadDrawer({ lead, open, onClose, onChange }) {
               autoComplete="tel"
               placeholder="(555)-123-4567"
               className="w-full bg-white/5 ring-1 ring-white/10 rounded-lg px-3 py-2 text-sm"
-              maxLength={14} // (XXX)-XXX-XXXX
+              maxLength={14}
             />
           </div>
           <div>
@@ -208,7 +229,10 @@ export default function LeadDrawer({ lead, open, onClose, onChange }) {
               onChange={(e) =>
                 setLocal({
                   ...local,
-                  nextAction: { ...(local.nextAction || {}), type: e.target.value || undefined },
+                  nextAction: {
+                    ...(local.nextAction || {}),
+                    type: e.target.value || undefined,
+                  },
                 })
               }
               placeholder="call / sms / email / appt"
@@ -262,10 +286,17 @@ export default function LeadDrawer({ lead, open, onClose, onChange }) {
         </div>
 
         <div className="flex items-center justify-end gap-2">
-          <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-sm">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-sm"
+          >
             Close
           </button>
-          <button type="submit" className="px-3 py-2 rounded-lg bg-[#5BE6CE] text-black font-medium hover:brightness-95 text-sm">
+          <button
+            type="submit"
+            className="px-3 py-2 rounded-lg bg-[#5BE6CE] text-black font-medium hover:brightness-95 text-sm"
+          >
             Save
           </button>
         </div>

@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { Search, ChevronDown, ArrowUpDown, Download, Trash2, UserPlus } from "lucide-react";
+import { Search, ArrowUpDown, Download, Trash2, UserPlus } from "lucide-react";
 import LeadDrawer from "../../components/LeadDrawer.jsx";
+import { useAuth } from "../../lib/authProvider.jsx";
+
 import {
-  loadLeads,
-  saveLeads,
-  updateLead,
-} from "../../lib/leadsStorage.js";
-import { getCurrentUserId, getCurrentUserRole } from "../../lib/roles.js";
+  watchLeads,
+  watchLeadsMine,
+  patchLead,
+  reassignLead,
+  deleteLead,
+} from "../../lib/leadsApi.js";
+
 import { loadPools } from "../../lib/roundRobinStorage.js";
 import QuickAddLeadModal from "../../components/QuickAddLeadModal.jsx";
 
@@ -23,7 +27,7 @@ const STATUS = [
 function useUserNameMap() {
   const pools = loadPools();
   const map = new Map();
-  pools.forEach(p => p.users.forEach(u => map.set(u.id, u.name)));
+  pools.forEach((p) => p.users.forEach((u) => map.set(u.id, u.name)));
   return (id) => map.get(id) || "—";
 }
 
@@ -45,12 +49,12 @@ function StatusPill({ value }) {
 }
 
 export default function Leads() {
-  const me = getCurrentUserId();
-  const role = getCurrentUserRole();
+  const { user, role } = useAuth();
+  const uid = user?.uid || null;
   const canSeeAll = role === "manager" || role === "bdc" || role === "admin";
   const userName = useUserNameMap();
 
-  const [leads, setLeads] = useState(loadLeads());
+  const [leads, setLeads] = useState([]);
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("all");
   const [showAll, setShowAll] = useState(false);
@@ -58,24 +62,30 @@ export default function Leads() {
   const [sortDir, setSortDir] = useState("desc"); // asc | desc
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [drawerLead, setDrawerLead] = useState(null);
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
 
+  // Realtime subscription
   useEffect(() => {
-    setLeads(loadLeads());
-  }, []);
-
-  useEffect(() => {
-    const handler = () => setLeads(loadLeads());
-    window.addEventListener("lead:created", handler);
-    return () => window.removeEventListener("lead:created", handler);
-  }, []);
+    if (!uid) return;
+    let unsub = () => {};
+    if (canSeeAll && showAll) {
+      unsub = watchLeads({
+        onChange: (rows) => setLeads(rows || []),
+        take: 2000,
+      });
+    } else {
+      unsub = watchLeadsMine(uid, {
+        onChange: (rows) => setLeads(rows || []),
+        take: 2000,
+      });
+    }
+    return () => unsub();
+  }, [uid, canSeeAll, showAll]);
 
   const filtered = useMemo(() => {
     const text = q.trim().toLowerCase();
-    return leads.filter(l => {
-      if (!showAll && !canSeeAll && l.assignedTo !== me) return false;
-      if (showAll && !canSeeAll && l.assignedTo !== me) return false; // non-managers can’t see others
-      if (!showAll && canSeeAll && l.assignedTo !== me && status === "mine") return false;
-
+    return leads.filter((l) => {
+      if (!canSeeAll && l.assignedTo !== uid) return false;
       if (status !== "all" && l.status !== status) return false;
 
       if (text) {
@@ -84,7 +94,7 @@ export default function Leads() {
       }
       return true;
     });
-  }, [leads, q, status, showAll, canSeeAll, me]);
+  }, [leads, q, status, canSeeAll, uid]);
 
   const sorted = useMemo(() => {
     const arr = [...filtered];
@@ -109,47 +119,52 @@ export default function Leads() {
       setSortDir(key === "due" ? "asc" : "desc");
       return;
     }
-    setSortDir(d => (d === "asc" ? "desc" : "asc"));
+    setSortDir((d) => (d === "asc" ? "desc" : "asc"));
   };
 
-  const allSelected = selectedIds.size > 0 && sorted.every(l => selectedIds.has(l.id));
+  const allSelected = selectedIds.size > 0 && sorted.every((l) => selectedIds.has(l.id));
   const someSelected = selectedIds.size > 0 && !allSelected;
 
   const toggleAll = () => {
     if (allSelected || someSelected) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(sorted.map(l => l.id)));
+      setSelectedIds(new Set(sorted.map((l) => l.id)));
     }
   };
   const toggleOne = (id) => {
-    setSelectedIds(prev => {
+    setSelectedIds((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   };
 
-  const assignToMe = () => {
+  const assignToMe = async () => {
     if (selectedIds.size === 0) return;
-    const next = leads.map(l => (selectedIds.has(l.id) ? { ...l, assignedTo: me, updatedAt: Date.now() } : l));
-    setLeads(next);
-    saveLeads(next);
-    setSelectedIds(new Set());
+    const ops = [...selectedIds].map((id) => reassignLead(id, uid));
+    try {
+      await Promise.all(ops);
+      setSelectedIds(new Set());
+    } catch (e) {
+      console.error("Assign failed", e);
+    }
   };
 
-  const deleteSelected = () => {
+  const deleteSelected = async () => {
     if (selectedIds.size === 0) return;
-    const next = leads.filter(l => !selectedIds.has(l.id));
-    setLeads(next);
-    saveLeads(next);
-    setSelectedIds(new Set());
+    try {
+      await Promise.all([...selectedIds].map((id) => deleteLead(id)));
+      setSelectedIds(new Set());
+    } catch (e) {
+      console.error("Delete failed", e);
+    }
   };
 
   const exportCSV = () => {
     const rows = [
       ["Name", "Phone", "Email", "Source", "Status", "Assigned", "NextActionType", "NextActionDue", "LastActivityAt"],
-      ...sorted.map(l => [
+      ...sorted.map((l) => [
         l.name,
         l.phone || "",
         l.email || "",
@@ -161,7 +176,7 @@ export default function Leads() {
         l.lastActivityAt ? new Date(l.lastActivityAt).toISOString() : "",
       ]),
     ];
-    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -174,10 +189,14 @@ export default function Leads() {
   const openLead = (lead) => setDrawerLead(lead);
   const closeDrawer = () => setDrawerLead(null);
 
-  const onDrawerChange = (updated) => {
-    const next = leads.map(l => (l.id === updated.id ? updated : l));
-    setLeads(next);
-    saveLeads(next);
+  const onDrawerChange = async (updated) => {
+    // Drawer itself already patches Firestore; no local save needed.
+    // But if you want optimistic UI, you could splice into `leads` here.
+    try {
+      await patchLead(updated.id, { ...updated });
+    } catch (e) {
+      // Usually unnecessary, since LeadDrawer already saved.
+    }
   };
 
   const fmtRel = (ts) => {
@@ -198,16 +217,25 @@ export default function Leads() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Leads</h1>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowQuickAdd(true)}
+            className="px-3 py-2 rounded-lg bg-[#5BE6CE] text-black font-medium hover:brightness-95 text-sm"
+          >
+            + Quick Add
+          </button>
           {canSeeAll && (
             <button
-              onClick={() => setShowAll(v => !v)}
+              onClick={() => setShowAll((v) => !v)}
               className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-sm"
               title={showAll ? "Showing all leads" : "Showing my leads"}
             >
               {showAll ? "All leads" : "My leads"}
             </button>
           )}
-          <button onClick={exportCSV} className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-sm inline-flex items-center gap-2">
+          <button
+            onClick={exportCSV}
+            className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-sm inline-flex items-center gap-2"
+          >
             <Download className="h-4 w-4" /> Export CSV
           </button>
         </div>
@@ -228,7 +256,7 @@ export default function Leads() {
 
         {/* Status pills */}
         <div className="flex items-center gap-1 overflow-x-auto">
-          {STATUS.map(s => (
+          {STATUS.map((s) => (
             <button
               key={s.id}
               onClick={() => setStatus(s.id)}
@@ -266,10 +294,16 @@ export default function Leads() {
         <div className="sticky top-16 z-10 rounded-xl bg-[#111821]/90 backdrop-blur ring-1 ring-white/10 px-3 py-2 flex items-center gap-2">
           <div className="text-sm">{selectedIds.size} selected</div>
           <div className="flex items-center gap-2 ml-auto">
-            <button onClick={assignToMe} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-sm inline-flex items-center gap-1">
+            <button
+              onClick={assignToMe}
+              className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-sm inline-flex items-center gap-1"
+            >
               <UserPlus className="h-4 w-4" /> Assign to me
             </button>
-            <button onClick={deleteSelected} className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-sm inline-flex items-center gap-1">
+            <button
+              onClick={deleteSelected}
+              className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-sm inline-flex items-center gap-1"
+            >
               <Trash2 className="h-4 w-4" /> Delete
             </button>
           </div>
@@ -285,7 +319,9 @@ export default function Leads() {
                 <input
                   type="checkbox"
                   checked={allSelected}
-                  ref={el => { if (el) el.indeterminate = someSelected; }}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someSelected;
+                  }}
                   onChange={toggleAll}
                 />
               </th>
@@ -335,12 +371,11 @@ export default function Leads() {
                   <td className="py-2 pr-4 align-middle text-right">
                     <button
                       className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/15"
-                      onClick={() => {
-                        const updated = updateLead(l.id, { assignedTo: me });
-                        if (updated) {
-                          const next = leads.map(x => (x.id === l.id ? updated : x));
-                          setLeads(next);
-                          saveLeads(next);
+                      onClick={async () => {
+                        try {
+                          await reassignLead(l.id, uid);
+                        } catch (e) {
+                          console.error("Assign failed", e);
                         }
                       }}
                       title="Assign to me"
@@ -369,6 +404,13 @@ export default function Leads() {
         open={!!drawerLead}
         onClose={closeDrawer}
         onChange={onDrawerChange}
+      />
+
+      {/* Quick Add */}
+      <QuickAddLeadModal
+        open={showQuickAdd}
+        onClose={() => setShowQuickAdd(false)}
+        onCreated={() => setShowQuickAdd(false)}
       />
     </div>
   );

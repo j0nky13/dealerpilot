@@ -1,17 +1,28 @@
-/**
- * roles.js
- * Temporary local role + user identity helpers
- * Replace with Firebase Auth or backend user context later.
- */
+export const ROLES = /** @type {const} */ ([
+  "admin",     // superuser for an org
+  "manager",   // can manage users within org
+  "sales",
+  "bdc",
+  "service",
+  "viewer",
+]);
 
-// Simulated role — can be "rep", "bdc", "manager", or "admin"
-export function getCurrentUserRole() {
-  // Adjust this to test different permission levels
-  return "rep"; // default salesperson view
+export function canManageUsers(role) {
+  return role === "admin" || role === "manager";
 }
 
-// Simulated user ID — must match one of the users in roundRobinStorage.js
-export function getCurrentUserId() {
-  // Example IDs: u1–u8
-  return "u4"; // Dana K. by default
+export function normalizeRole(value) {
+  const v = String(value || "").toLowerCase();
+  return ROLES.includes(v) ? v : "sales";
+}
+
+export function roleLabel(role) {
+  switch (role) {
+    case "admin": return "Admin";
+    case "manager": return "Manager";
+    case "sales": return "Sales";
+    case "bdc": return "BDC";
+    case "service": return "Service";
+    default: return "Viewer";
+  }
 }

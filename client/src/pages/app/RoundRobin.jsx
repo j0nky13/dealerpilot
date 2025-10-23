@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import RoundRobinBoard from "../../components/RoundRobinBoard.jsx";
-import { getCurrentUserRole } from "../../lib/roles.js";
+import { useAuth } from "../../lib/authProvider.jsx";
 import { loadPools, savePools } from "../../lib/roundRobinStorage.js";
 
 /**
@@ -11,7 +11,7 @@ import { loadPools, savePools } from "../../lib/roundRobinStorage.js";
  */
 export default function RoundRobin() {
   const [pools, setPools] = useState(loadPools());
-  const role = getCurrentUserRole(); // "rep" | "bdc" | "manager" | "admin"
+  const { user, role } = useAuth();
   const canEdit = role === "manager" || role === "bdc" || role === "admin";
 
   useEffect(() => {

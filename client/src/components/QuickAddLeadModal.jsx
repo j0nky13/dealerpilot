@@ -1,24 +1,25 @@
 import { useState } from "react";
 import Modal from "./Modal.jsx";
-import { addLead } from "../lib/leadsStorage.js";
+import { createLead } from "../lib/leadsApi.js";
 import { addAppointment } from "../lib/appointmentsStorage.js";
-import { getCurrentUserId } from "../lib/roles.js";
+import { useAuth } from "../lib/authProvider.jsx";
 
-// --- helpers: clean & format to (XXX)-XXX-XXXX ---
+// helpers: format UI, keep raw for DB
 function onlyDigits(v = "") {
-  return (v.match(/\d/g) || []).join("").slice(0, 10); // cap at 10 digits
+  return (v.match(/\d/g) || []).join("").slice(0, 10);
 }
-function formatUSPhone(digits) {
+function formatUSPhone(digits = "") {
   const d = onlyDigits(digits);
-  const len = d.length;
-  if (len === 0) return "";
-  if (len <= 3) return `(${d}`;
-  if (len <= 6) return `(${d.slice(0, 3)})-${d.slice(3)}`;
-  return `(${d.slice(0, 3)})-${d.slice(3, 6)}-${d.slice(6)}`;
+  if (d.length === 0) return "";
+  if (d.length <= 3) return `(${d}`;
+  if (d.length <= 6) return `(${d.slice(0,3)})-${d.slice(3)}`;
+  return `(${d.slice(0,3)})-${d.slice(3,6)}-${d.slice(6)}`;
 }
 
 export default function QuickAddLeadModal({ open, onClose, onCreated }) {
-  const me = getCurrentUserId();
+  const { user } = useAuth();
+  const uid = user?.uid ?? null;
+
   const [form, setForm] = useState({
     name: "",
     phone: "",
@@ -27,64 +28,94 @@ export default function QuickAddLeadModal({ open, onClose, onCreated }) {
     note: "",
   });
   const [scheduleNow, setScheduleNow] = useState(false);
-  const [apptAt, setApptAt] = useState(() =>
-    new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16)
+  const [apptAt, setApptAt] = useState(
+    () => new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16)
   );
   const [durationMin, setDurationMin] = useState(30);
   const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
 
   const update = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  const handlePhoneChange = (e) => {
-    const next = formatUSPhone(e.target.value);
-    setForm((f) => ({ ...f, phone: next }));
-  };
+  const handlePhoneChange = (e) => setForm((f) => ({ ...f, phone: formatUSPhone(e.target.value) }));
   const handlePhonePaste = (e) => {
     const pasted = (e.clipboardData || window.clipboardData).getData("text");
-    const next = formatUSPhone(pasted);
     e.preventDefault();
-    setForm((f) => ({ ...f, phone: next }));
+    setForm((f) => ({ ...f, phone: formatUSPhone(pasted) }));
   };
 
   const submit = async (e) => {
     e.preventDefault();
-    const hasAnyContact =
-      form.name.trim() || form.email.trim() || form.phone.trim();
-    if (!hasAnyContact) return;
+    setErr("");
 
-    setSaving(true);
-
-    // 1) Create the lead
-    const id = addLead({
-      name: form.name.trim() || "Unnamed",
-      phone: form.phone.trim() || undefined, // stored formatted; swap to onlyDigits(form.phone) if you want raw
-      email: form.email.trim() || undefined,
-      source: form.source.trim() || "Manual",
-      status: scheduleNow ? "appt_set" : "new",
-      assignedTo: me,
-      nextAction: scheduleNow
-        ? { type: "appt", dueAt: new Date(apptAt).getTime() }
-        : { type: "call", dueAt: Date.now() + 2 * 60 * 60 * 1000 },
-      note: form.note.trim() || undefined,
-    });
-
-    // 2) Optional appointment
-    if (scheduleNow) {
-      addAppointment({
-        leadId: id,
-        leadName: form.name.trim() || "Unnamed",
-        type: "sales",
-        at: new Date(apptAt).getTime(),
-        durationMin: Number(durationMin) || 30,
-        status: "scheduled",
-        assignedTo: me,
-        notes: form.note?.trim() || "",
-      });
+    // Require at least one identifier
+    const hasAnyContact = form.name.trim() || form.email.trim() || form.phone.trim();
+    if (!hasAnyContact) {
+      setErr("Enter a name, email, or phone.");
+      return;
     }
 
-    setSaving(false);
-    onCreated?.(id);
-    onClose?.();
+    // Optional: prevent creating invisible leads when signed out
+    // If you prefer to allow, we’ll mark as unassigned.
+    const assignedTo = uid || null;
+    const status = scheduleNow ? "appt_set" : (assignedTo ? "new" : "unassigned");
+
+    setSaving(true);
+    try {
+      const phoneDigits = onlyDigits(form.phone);
+      const emailNorm = form.email.trim().toLowerCase();
+
+      // 1) Create the lead in Firestore (raw digits for search; UI keeps formatted)
+      const id = await createLead({
+        name: form.name.trim() || "Unnamed",
+        phone: phoneDigits || undefined,
+        email: emailNorm || undefined,
+        source: form.source.trim() || "Manual",
+        status,
+        assignedTo,                 // null if no session; managers can claim
+        nextAction: scheduleNow
+          ? { type: "appt", dueAt: new Date(apptAt).getTime() }
+          : { type: "call", dueAt: Date.now() + 2 * 60 * 60 * 1000 },
+        note: form.note.trim() || undefined,
+        createdBy: uid || null,
+      });
+
+      // 2) Optional appointment (still local for now; later we’ll move to Firestore)
+      if (scheduleNow) {
+        const atMs = new Date(apptAt).getTime();
+        if (!Number.isNaN(atMs)) {
+          addAppointment({
+            leadId: id,
+            leadName: form.name.trim() || "Unnamed",
+            type: "sales",
+            at: atMs,
+            durationMin: Number(durationMin) || 30,
+            status: "scheduled",
+            assignedTo: assignedTo,
+            notes: form.note?.trim() || "",
+            createdBy: uid || null,
+            createdAt: Date.now(),
+          });
+        }
+      }
+
+      // Optional: notify legacy listeners
+      window.dispatchEvent(new CustomEvent("lead:created", { detail: { id } }));
+
+      // Reset form for quick successive entries
+      setForm({ name: "", phone: "", email: "", source: "", note: "" });
+      setScheduleNow(false);
+      setApptAt(new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16));
+      setDurationMin(30);
+
+      onCreated?.(id);
+      onClose?.();
+    } catch (ex) {
+      console.error(ex);
+      setErr(ex.message || "Failed to save lead");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -122,7 +153,7 @@ export default function QuickAddLeadModal({ open, onClose, onCreated }) {
               autoComplete="tel"
               placeholder="(555)-123-4567"
               className="w-full bg-white/5 ring-1 ring-white/10 rounded-lg px-3 py-2 text-sm"
-              maxLength={14} // (XXX)-XXX-XXXX
+              maxLength={14} // UI format length
             />
           </label>
 
@@ -186,6 +217,8 @@ export default function QuickAddLeadModal({ open, onClose, onCreated }) {
             </div>
           )}
         </div>
+
+        {err && <p className="text-sm text-red-400">{err}</p>}
 
         <div className="flex items-center justify-end gap-2 pt-2">
           <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-sm">

@@ -1,23 +1,25 @@
 // src/pages/Login.jsx
 import { useEffect, useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
-import { completeMagicLinkSignIn, sendMagicLink } from "../lib/firebase";
+import { useNavigate } from "react-router-dom";
+import { completeMagicLinkSignIn, sendMagicLink, logout } from "../lib/firebase";
 import { useAuth } from "../lib/authProvider.jsx";
 import AnimatedGrid from "../components/AnimatedGrid.jsx";
+import FancyLoader from "../components/FancyLoader.jsx";
 
 export default function Login() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const nav = useNavigate();
 
   const [email, setEmail] = useState("");
   const [storeCode, setStoreCode] = useState(() => localStorage.getItem("storeCode") || "");
   const [sent, setSent] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
   const [err, setErr] = useState("");
 
-  // Complete magic link if present
+  // Complete magic link if present (runs once)
   useEffect(() => {
     completeMagicLinkSignIn().catch((e) => setErr(e.message || "Sign-in failed"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Prefill store code from ?store= param if present
@@ -30,8 +32,60 @@ export default function Login() {
     }
   }, []);
 
-  if (user) return <Navigate to="/app/today" replace />;
+  // Loading state from auth provider — avoid rendering UI until we know auth status
+  if (loading) {
+    return <FancyLoader title="Checking authentication…" subtitle="Preparing your workspace" />;
+  }
 
+  // If already signed in, show a gentle gate instead of auto-redirecting
+  if (user) {
+    return (
+      <div className="relative min-h-screen overflow-hidden bg-[#0B0F14] text-white">
+        <div className="absolute inset-0 -z-10" aria-hidden="true">
+          <AnimatedGrid />
+        </div>
+
+        <button
+          onClick={() => nav(-1)}
+          className="absolute left-5 top-5 z-20 rounded-md px-3 py-1.5 text-sm text-[#9FB0C6] hover:text-white hover:bg-white/5"
+        >
+          ← Back
+        </button>
+        <div className="absolute right-5 top-5 z-20 text-xs text-[#9FB0C6]">Secure Portal</div>
+
+        <main className="relative z-10 grid min-h-screen place-items-center px-6 py-16">
+          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0F161F]/80 p-6 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.6)] backdrop-blur">
+            <h1 className="text-xl font-semibold">You’re already signed in</h1>
+            <p className="mt-1 text-sm text-[#9FB0C6]">{user.email}</p>
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button
+                onClick={() => nav("/app/today", { replace: true })}
+                className="rounded-lg bg-[#5BE6CE] px-4 py-2 font-medium text-black hover:brightness-95"
+              >
+                Continue to app
+              </button>
+              <button
+                onClick={async () => {
+                  await logout();
+                  nav("/login", { replace: true });
+                }}
+                className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 hover:bg-white/10"
+              >
+                Sign out
+              </button>
+            </div>
+
+            <p className="mt-5 text-center text-[11px] text-[#748AA5]">
+              If this isn’t you, sign out and sign back in with the correct email.
+            </p>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // Not signed in: render the email-link flow
   return (
     <div className="relative min-h-screen overflow-hidden bg-[#0B0F14] text-white">
       {/* Animated Background */}
@@ -55,7 +109,6 @@ export default function Login() {
         <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0F161F]/80 p-6 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.6)] backdrop-blur">
           {/* header */}
           <div className="mb-4 flex items-center gap-3">
-            {/* shield icon */}
             <span className="grid h-9 w-9 place-items-center rounded-lg bg-white/5 ring-1 ring-white/10">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                 <path d="M12 3l7 3v6c0 4.97-3.05 8.91-7 10-3.95-1.09-7-5.03-7-10V6l7-3z" stroke="#5BE6CE" strokeWidth="1.5" />
@@ -74,7 +127,7 @@ export default function Login() {
               e.preventDefault();
               setErr("");
               setSent(false);
-              setLoading(true);
+              setSending(true);
               try {
                 if (storeCode) localStorage.setItem("storeCode", storeCode.trim());
                 await sendMagicLink(email.trim());
@@ -82,7 +135,7 @@ export default function Login() {
               } catch (ex) {
                 setErr(ex.message || "Failed to send link");
               } finally {
-                setLoading(false);
+                setSending(false);
               }
             }}
           >
@@ -132,10 +185,10 @@ export default function Login() {
             {/* primary action */}
             <button
               type="submit"
-              disabled={loading}
+              disabled={sending}
               className="w-full rounded-lg bg-[#5BE6CE] px-4 py-2.5 font-medium text-black transition hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {loading ? "Sending…" : "Send sign-in link"}
+              {sending ? "Sending…" : "Send sign-in link"}
             </button>
           </form>
 
